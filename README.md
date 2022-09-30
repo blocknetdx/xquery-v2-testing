@@ -1,27 +1,46 @@
-# XQuery v2.0
+# XQuery 2.0
 
-## Setup For Testing Milestone 1
+## Setup 
 
-Note: As of this writing, there is a minor bug in XQ v2.0 which prevents it
-from indexing the AVAX blockchain past block height 2433078.
+### Dependencies 
 
-### Dependencies & Requirements
+- Linux Ubuntu 20.04 LTS (or similar)
+- Python 3.8 or 3.9
+- running PostgreSQL server
+- running Redis server
+- running Web3 enabled node (ETH, AVAX, etc.)
 
-- python 3.8 or 3.9
-- docker version 20.10
-- docker compose version v2.3.4
-- alembic 1.8.0
-- Ensure no containers or services are listening on any of the
-  following ports: `5432`, `6379`, `8080`
-
-### Clone This Repository and Enter Cloned Repo
+### Build Python 3.10 (not yet supported)
 
 ```shell
-git clone https://github.com/blocknetdx/xquery-v2-testing
-cd xquery-v2-testing
+sudo apt install build-essential gdb lcov pkg-config \
+      libbz2-dev libffi-dev libgdbm-dev libgdbm-compat-dev liblzma-dev \
+      libncurses5-dev libreadline6-dev libsqlite3-dev libssl-dev \
+      lzma lzma-dev tk-dev uuid-dev zlib1g-dev
 ```
 
-### Set Up & Activate Virtual Environment
+```shell
+mkdir /tmp/python && cd "$_"
+
+# pull Python source
+wget https://www.python.org/ftp/python/3.10.5/Python-3.10.5.tar.xz
+tar xvf Python-3.*.tar.xz
+cd Python-3.*/
+
+# build 
+./configure --enable-optimizations
+make -j $(nproc)
+
+# install 
+# Note: `make install` can overwrite or masquerade the python3 binary. `make altinstall` is therefore recommended
+sudo make altinstall
+```
+
+### Virtual Environment
+
+```shell
+sudo apt install python3-virtualenv
+```
 
 ```shell
 virtualenv -p python3 ./.venv
@@ -30,172 +49,112 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-#### Errors running pip install -r requirements.txt
-
-If `pip install -r requirements.txt` returns error messages about not
-being able to compile/install the package `psycopg2`, edit
-`requirements.txt` and change this line:
-```
-psycopg2[binary]==2.9.3
-```
-to this:
-```
-psycopg2-binary==2.9.3
-```
-Then issue once again:
+For Python 3.10 use (not yet supported):
 ```shell
+/usr/local/bin/python3.10 -m venv ./.venv
+source .venv/bin/activate
+
+pip install -U setuptools
 pip install -r requirements.txt
 ```
 
+> XQuery requires the `psycopg2` python package, which is compiled from source and thus has 
+> additional system prerequisites (C compiler, system dev packages).
+> See [here](https://www.psycopg.org/docs/install.html#install-from-source).
+
+The required system packages can be install with:
+```shell
+sudo apt install build-essential python3-dev libpq-dev gcc
+```
+
+> Alternatively, install the precompiled `psycopg2-binary` python package instead.
+
 ### Configuration
 
-All configurable settings are consolidated in `xquery/config.py`. Generally, no other files need to be modified!
-The `xquery/config.py` file included in this repo should be considered
-as an example/template. Feel free to change configs as desired.
-For example, the web3 provider RPC URLs in this template config are as
-follows:
-```py
+All configurable settings are consolidated in `xquery/config.py`. Generally, no other files need to be modified.
+
+The following options (with default value) are available and can be adjusted in the configuration file.
+Alternatively, each option can also be set via its corresponding env variable. See details bellow:
+
+```python
+CONFIG = {
+    # Database settings
+    "DB_HOST": os.getenv("DB_HOST", "localhost"),
+    "DB_PORT": os.getenv("DB_PORT", 5432),
+    "DB_USERNAME": os.getenv("DB_USERNAME", "root"),
+    "DB_PASSWORD": os.getenv("DB_PASSWORD", "password"),
+    "DB_DATABASE": os.getenv("DB_DATABASE", "debug"),
+    "DB_SCHEMA": os.getenv("DB_SCHEMA", "public"),
+
+    # Redis cache settings
+    "REDIS_HOST": os.getenv("REDIS_HOST", "localhost"),
+    "REDIS_PORT": os.getenv("REDIS_PORT", 6379),
+    "REDIS_PASSWORD": os.getenv("REDIS_PASSWORD", "password"),
+    "REDIS_DATABASE": os.getenv("REDIS_DATABASE", 0),
+
+    # Controller
+    "XQ_NUM_WORKERS": os.getenv("XQ_NUM_WORKERS", 8),
+    
     # web3 provider RPC url
-    "API_URL": {
-        "ETH": None,
-        "AVAX": "https://api.avax.network/ext/bc/C/rpc",
-        "SYS": "https://rpc.syscoin.org/",
-    },
-```
-This configures XQ to fetch blockchain data for AVAX from the public
-AVAX blockchain source, "https://api.avax.network/ext/bc/C/rpc". That
-works fine, but that source of AVAX data is rate limited. If you have
-AVAX running locally and you want to ensure AVAX indexing speed is not
-limited by the source of AVAX blockchain data, you may wish to change
-this section of the config file to be something like this:
-```py
-    # web3 provider RPC url
-    "API_URL": {
-        "ETH": None,
-        "AVAX": "http://172.31.11.28:9650/ext/bc/C/rpc",
-        "SYS": "https://rpc.syscoin.org/",
-    },
-```
-...where `172.31.11.28` is the IP of the local `avax` container.
-If you are running a local SYS container or ETH container, you may
-wish to also adjust their web3 provider RPC URLs to reference local,
-unlimited rate sources.
-
-### Launch Postgres, Redis & Hasura containers
-
-```shell
-cd contrib
-cp .env.template .env
-./run.sh
-cd ..
+    "API_URL": os.getenv("API_URL", "http://localhost:8545/"),
+    # "API_URL": os.getenv("API_URL", "https://cloudflare-eth.com/v1/mainnet"),  # ETH
+    # "API_URL": os.getenv("API_URL", "https://api.avax.network/ext/bc/C/rpc"),  # AVAX
+    # "API_URL": os.getenv("API_URL", "https://rpc.syscoin.org/"),  # SYS
+}
 ```
 
-## Database
+### Database
 
-Run the following commands to create the database tables.
+Run the following commands to first create a migration and then apply it (create database tables).
 
 ```shell
 alembic -n default -c alembic/alembic.ini revision --autogenerate -m 'creating schema'
 alembic -n default -c alembic/alembic.ini upgrade head
 ```
 
-### Run Example
+### Verify Setup
+
+Optionally, test the environment and configuration:
 
 ```shell
-python -m run 2> run.log &
+python -m test_setup
 ```
-The above command starts the indexing of AVAX blockchain into a
-database stored on a (temporary) volume attached to the `xquery-pg`
-(postgres) container. (Modify `run.py` before issuing this command to have it index other EVMs.)
-Logs generated by `python -m run` are streamed to STDERR, which is why
-this example redirects STDERR to a file with `2> run.log`, and runs the
-`run` module in the background with `&` at the end.
-To watch the streaming logs, you can issue:
+
+## Run Example
+
+Run one of the preconfigured examples, Pangolin (PNG) Exchange on Avalanche or Pegasys (PSYS) Exchange on Syscoin:
+
 ```shell
-tail -f run.log
+python -m run_png
+python -m run_psys
 ```
-Then issue ^C to interrupt the scrolling logs.
-To interrupt the `python -m run` command:
-```shell
-# bring the python -m run process to the foreground:
-fg
-# then interrupt the python -m run process by issuing (at least one) ^C
-```
-
-(Instead of issuing `python -m run 2> run.log &`, one could alternatively open a `tmux` window, activate the same
-virtual environment there with `source .venv/bin/activate`, then issue `python -m run` in the tmux
-window and let the logs scroll within the tmux window.)
-
-### Verify Indexed Data in Hasura Console
-
-Find the IP of the server where XQuery v2 is running:
-```
-curl ifconfig.co
-# OR
-curl ifconfig.io
-```
-Note the IP of your server, which we'll refer to here as `<SERVER-IP>`
-
-Navigate in a web browser to:
-```
-http://<SERVER-IP>:8080/console
-```
-This should give you a graphical Hasura GraphQL interface to the
-database indexed by XQuery v2. You can make specific queries for
-specific blocks through this GUI, then compare the query results to
-the information given in Blockchain Explorers.
-
-#### Add Tables to Hasura Console
-
-The first time you navigate in a web browser to
-`http://<SERVER-IP>:8080/console`, you'll probably see some message
-about not having any tables available to query from, and a suggestion
-to click the **Data** tab above to add/create some tables. Follow this
-suggestion and click the **Data** tab. Upon clicking the **Data** tab,
-click the **public** tab on the left. At this point, you should be
-given the option to add/create the following tables, and you should add all
-of them:
-```
-alembic_version
-indexer_state
-processor_state
-xquery
-```
-The only table of real interest is the `xquery` table, which is where
-you can query for indexed EVM data. The `indexer_state` table might
-also be of interest, as it provides data about the most recently
-indexed block.
-
-The following image shows where the **Data** and **public** tabs are
-located on the Hasura Console screen:
-
-![Hasura Console](https://github.com/blocknetdx/xquery-v2-testing/blob/main/img/hasura.png?raw=true)
 
 ## Tests
 
 > WARNING: Some tests currently affect the state of the cache and database. Only run on a development setup!
 
+> Some tests only run on Avalanche (AVAX) currently
+
 ```shell
 pytest --collect-only tests/
-pytest --collect-only -k="cache" tests/
 
 pytest -v tests/
+pytest -v -rP tests/
+
 pytest -v -k="cache" tests/
+pytest -v -k="filter" tests/
+pytest -v -k="indexer" tests/
+pytest -v -k="middleware" tests/
 ```
 
 ## Benchmarks
 
 ```shell
+python -m bench.bench_cache_redis
 python -m bench.bench_fetch_token
 python -m bench.bench_fetch_token_batched
 python -m bench.bench_get_block
 python -m bench.bench_get_block_batched
 python -m bench.bench_get_logs
 python -m bench.bench_serialize
-```
-
-## Deactivate Virtual Environment When Finished
-
-```shell
-deactivate
 ```
